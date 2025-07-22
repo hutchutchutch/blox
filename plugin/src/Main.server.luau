@@ -1,117 +1,352 @@
-local Main = script:FindFirstAncestor("MCPStudioPlugin")
-local MockWebSocketService = require(Main.MockWebSocketService)
-local Types = require(Main.Types)
+local Types = require(script.Parent.Types)
+local RewardSystem = require(script.Parent.RewardSystem)
+local RebirthSystem = require(script.Parent.RebirthSystem)
 
-local ChangeHistoryService = game:GetService("ChangeHistoryService")
-local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local StudioService = game:GetService("StudioService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
+local CollectionService = game:GetService("CollectionService")
 
-local URI = "http://localhost:44755"
-local RECEIVE_ENDPOINT = "/request"
-local SEND_ENDPOINT = "/response"
+local HEAT_DETECTION_RANGE = 100
+local TEMPERATURE_UPDATE_RATE = 0.1
+local SPAWN_DISTANCE_MIN = 50
 
-if RunService:IsRunning() then
-	return
-end
+local playerDataStore = DataStoreService:GetDataStore("HeatSeekerPlayerData")
 
-local old_warn = warn
-local function log(...)
-	if false then
-		old_warn(...)
+local heatSources: {Types.HeatSource} = {}
+local predators: {Types.Predator} = {}
+local activePlayers: {[Player]: Types.PlayerData} = {}
+
+local function createRemotes()
+	local remotes = Instance.new("Folder")
+	remotes.Name = "HeatSeekerRemotes"
+	remotes.Parent = ReplicatedStorage
+	
+	local events = {
+		"TemperatureUpdate",
+		"CollectTreasure", 
+		"CollectEgg",
+		"PurchaseUpgrade",
+		"Rebirth",
+		"UpdatePlayerData",
+		"SpawnEffect",
+		"PredatorAlert"
+	}
+	
+	for _, eventName in events do
+		local remote = Instance.new("RemoteEvent")
+		remote.Name = eventName
+		remote.Parent = remotes
 	end
+	
+	return remotes
 end
 
-local function fetchBuiltinTools()
-	local tools = {}
-	for _, tool in Main.Tools:GetChildren() do
-		if tool:IsA("ModuleScript") then
-			table.insert(tools, require(tool) :: Types.ToolFunction)
-		end
-	end
-	return tools
+local function createLeaderstats(player: Player)
+	local leaderstats = Instance.new("Folder")
+	leaderstats.Name = "leaderstats"
+	leaderstats.Parent = player
+	
+	local money = Instance.new("IntValue")
+	money.Name = "Money"
+	money.Value = 0
+	money.Parent = leaderstats
+	
+	local rebirthLevel = Instance.new("IntValue")
+	rebirthLevel.Name = "Rebirth"
+	rebirthLevel.Value = 0
+	rebirthLevel.Parent = leaderstats
+	
+	local eggsFound = Instance.new("IntValue")
+	eggsFound.Name = "Eggs"
+	eggsFound.Value = 0
+	eggsFound.Parent = leaderstats
+	
+	return leaderstats
 end
 
-local tools = fetchBuiltinTools()
-
-local function connectWebSocket()
-	local client = MockWebSocketService:CreateClient(URI)
-	client:SetReceiveEndpoint(RECEIVE_ENDPOINT)
-	client:SetSendEndpoint(SEND_ENDPOINT)
-
-	client.Opened:Once(function()
-		log("[MCP] Connection opened")
+local function loadPlayerData(player: Player): Types.PlayerData
+	local success, data = pcall(function()
+		return playerDataStore:GetAsync(tostring(player.UserId))
 	end)
-
-	client.Closed:Once(function()
-		log("[MCP] Connection closed")
-	end)
-
-	client.MessageReceived:Connect(function(message)
-		log("[MCP] Message received")
-
-		local body = HttpService:JSONDecode(message)
-		assert(body and body.id and body.args, "Invalid message received")
-
-		local id: string = body.id
-		local responseSent = false
-		local function sendResponseOnce(response: string)
-			if not responseSent then
-				log("[MCP] Sending response:" .. response)
-				responseSent = true
-				client:Send({
-					id = id,
-					response = response,
-				})
-			end
-		end
-
-		local args: Types.ToolArgs = body.args
-		local recording = ChangeHistoryService:TryBeginRecording("StudioMCP")
-
-		for _, tool in tools do
-			local success, response = pcall(tool, args)
-
-			if success and response then
-				sendResponseOnce(response)
-			elseif not success then
-				sendResponseOnce("Error handling request: " .. tostring(response))
-			end
-		end
-
-		if recording then
-			ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
-		end
-
-		sendResponseOnce("No tool found to handle request")
-		log("[MCP] Successfully handled request")
-	end)
-
-	return client
-end
-
-local function getButtonImage()
-	local ok, response = pcall(function()
-		return StudioService:GetClassIcon("PackageLink").Image
-	end)
-	return ok and response or "rbxasset://textures/ui/GuiImagePlaceholder.png"
-end
-
-local currentClient: MockWebSocketService.MockWebSocketClient? = connectWebSocket() -- nil for default off
-print("The MCP Studio plugin is ready for prompts.")
-
-local toolbar = plugin:CreateToolbar("MCP")
-local toggleButton = toolbar:CreateButton("Toggle MCP", "Toggle connection to the server", getButtonImage())
-toggleButton.ClickableWhenViewportHidden = true
-toggleButton:SetActive(currentClient ~= nil)
-
-toggleButton.Click:Connect(function()
-	if not currentClient then
-		currentClient = connectWebSocket()
-		print("The MCP Studio plugin is ready for prompts.")
+	
+	if success and data then
+		return data
 	else
-		currentClient:Close()
-		currentClient = nil
-		print("The MCP Studio plugin is stopped.")
+		return {
+			money = 0,
+			rebirthTokens = 0,
+			rebirthLevel = 0,
+			eggsFound = 0,
+			upgrades = {},
+			totalMoneyCollected = 0,
+			lastDailyReward = 0,
+		}
+	end
+end
+
+local function savePlayerData(player: Player)
+	local data = activePlayers[player]
+	if data then
+		pcall(function()
+			playerDataStore:SetAsync(tostring(player.UserId), data)
+		end)
+	end
+end
+
+local function createHeatSource(position: Vector3, heatType: Types.HeatType, value: number): Types.HeatSource
+	local model
+	local part
+	
+	if heatType == "good" then
+		local rarity = RewardSystem.getRandomTreasureRarity()
+		model = RewardSystem.createTreasureModel(position, rarity)
+		part = model:FindFirstChild("Chest")
+		value = math.random(RewardSystem.TREASURE_RARITIES[rarity].minValue, RewardSystem.TREASURE_RARITIES[rarity].maxValue)
+	elseif heatType == "egg" then
+		local eggRarity = RewardSystem.getRandomEggRarity()
+		model = RewardSystem.createEggModel(position, eggRarity)
+		part = model:FindFirstChild("EggPart")
+		local eggData = RewardSystem.EGG_DATA[eggRarity]
+		value = eggData.tokenReward
+		model:SetAttribute("EggRarity", eggRarity)
+		model:SetAttribute("MoneyReward", math.random(eggData.moneyReward.min, eggData.moneyReward.max))
+	else
+		part = Instance.new("Part")
+		part.Name = heatType .. "HeatSource"
+		part.Anchored = true
+		part.CanCollide = false
+		part.Transparency = 0.5
+		part.Size = Vector3.new(4, 4, 4)
+		part.Position = position
+		part.BrickColor = BrickColor.new("Really red")
+		part.Material = Enum.Material.ForceField
+		part.Parent = workspace
+		
+		local dangerLight = Instance.new("PointLight")
+		dangerLight.Brightness = 2
+		dangerLight.Color = Color3.new(1, 0, 0)
+		dangerLight.Range = 15
+		dangerLight.Parent = part
+	end
+	
+	if part then
+		CollectionService:AddTag(part, "HeatSource")
+		CollectionService:AddTag(part, heatType)
+		
+		local source: Types.HeatSource = {
+			part = part,
+			heatType = heatType,
+			value = value,
+			position = position,
+			id = tostring(#heatSources + 1),
+		}
+		
+		part:SetAttribute("SourceId", source.id)
+		if model then
+			model:SetAttribute("SourceId", source.id)
+		end
+		
+		table.insert(heatSources, source)
+		return source
+	end
+end
+
+local function spawnHeatSources()
+	local spawnPositions = {
+		Vector3.new(math.random(-200, 200), 5, math.random(-200, 200)),
+		Vector3.new(math.random(-200, 200), 5, math.random(-200, 200)),
+		Vector3.new(math.random(-200, 200), 5, math.random(-200, 200)),
+	}
+	
+	for _, pos in spawnPositions do
+		local rand = math.random()
+		if rand < 0.7 then
+			createHeatSource(pos, "good", math.random(100, 500))
+		elseif rand < 0.9 then
+			createHeatSource(pos, "bad", 0)
+		else
+			createHeatSource(pos, "egg", math.random(1, 5))
+		end
+	end
+end
+
+local function calculateTemperature(playerPosition: Vector3): Types.Temperature
+	local closestDistance = math.huge
+	local closestHeatType = nil
+	local closestValue = 0
+	
+	for _, source in heatSources do
+		local distance = (source.position - playerPosition).Magnitude
+		if distance < closestDistance and distance <= HEAT_DETECTION_RANGE then
+			closestDistance = distance
+			closestHeatType = source.heatType
+			closestValue = source.value
+		end
+	end
+	
+	local intensity = closestHeatType and math.max(0, 1 - (closestDistance / HEAT_DETECTION_RANGE)) or 0
+	
+	return {
+		distance = closestDistance,
+		heatType = closestHeatType,
+		intensity = intensity,
+	}
+end
+
+local function updatePlayerStats(player: Player, data: Types.PlayerData)
+	if player:FindFirstChild("leaderstats") then
+		player.leaderstats.Money.Value = data.money
+		player.leaderstats.Rebirth.Value = data.rebirthLevel
+		player.leaderstats.Eggs.Value = data.eggsFound
+	end
+end
+
+local function handlePlayerJoin(player: Player)
+	local leaderstats = createLeaderstats(player)
+	local playerData = loadPlayerData(player)
+	activePlayers[player] = playerData
+	updatePlayerStats(player, playerData)
+	
+	player.CharacterAdded:Connect(function(character)
+		local humanoid = character:WaitForChild("Humanoid")
+		RebirthSystem.applyRebirthBonuses(player, playerData)
+		remotes.UpdatePlayerData:FireClient(player, playerData)
+	end)
+end
+
+local function handlePlayerLeave(player: Player)
+	savePlayerData(player)
+	activePlayers[player] = nil
+end
+
+local remotes = createRemotes()
+
+local lastTemperatureUpdate = 0
+RunService.Heartbeat:Connect(function()
+	local now = tick()
+	
+	if now - lastTemperatureUpdate >= TEMPERATURE_UPDATE_RATE then
+		lastTemperatureUpdate = now
+		
+		for _, player in Players:GetPlayers() do
+			if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+				local position = player.Character.HumanoidRootPart.Position
+				local temperature = calculateTemperature(position)
+				
+				remotes.TemperatureUpdate:FireClient(player, temperature)
+			end
+		end
+	end
+end)
+
+remotes.CollectTreasure:Connect(function(player: Player, sourceId: string)
+	local data = activePlayers[player]
+	if not data then return end
+	
+	for i, source in heatSources do
+		if source.id == sourceId and source.heatType == "good" then
+			local moneyGained = source.value * (1 + data.rebirthLevel * 0.25)
+			data.money = data.money + moneyGained
+			data.totalMoneyCollected = data.totalMoneyCollected + moneyGained
+			
+			updatePlayerStats(player, data)
+			remotes.UpdatePlayerData:FireClient(player, data)
+			
+			local model = source.part.Parent
+			if model and model:IsA("Model") then
+				RewardSystem.collectTreasureEffect(model, moneyGained)
+			else
+				RewardSystem.spawnMoneyRain(source.position, moneyGained)
+				source.part:Destroy()
+			end
+			
+			table.remove(heatSources, i)
+			
+			task.wait(2)
+			spawnHeatSources()
+			break
+		end
+	end
+end)
+
+remotes.CollectEgg:Connect(function(player: Player, sourceId: string)
+	local data = activePlayers[player]
+	if not data then return end
+	
+	for i, source in heatSources do
+		if source.id == sourceId and source.heatType == "egg" then
+			local model = source.part.Parent
+			local eggRarity = model:GetAttribute("EggRarity") or "common"
+			local moneyReward = model:GetAttribute("MoneyReward") or 100
+			
+			local tokenMultiplier = 1 + (data.rebirthLevel >= 3 and 1 or 0)
+			local tokensGained = source.value * tokenMultiplier
+			
+			data.money = data.money + moneyReward
+			data.rebirthTokens = data.rebirthTokens + tokensGained
+			data.eggsFound = data.eggsFound + 1
+			data.totalMoneyCollected = data.totalMoneyCollected + moneyReward
+			
+			updatePlayerStats(player, data)
+			remotes.UpdatePlayerData:FireClient(player, data)
+			
+			if model and model:IsA("Model") then
+				RewardSystem.collectEggEffect(model, RewardSystem.EGG_DATA[eggRarity])
+			else
+				remotes.SpawnEffect:FireAllClients("eggCollect", source.position, tokensGained)
+				source.part:Destroy()
+			end
+			
+			table.remove(heatSources, i)
+			
+			task.wait(3)
+			spawnHeatSources()
+			break
+		end
+	end
+end)
+
+remotes.Rebirth.OnServerEvent:Connect(function(player: Player)
+	local data = activePlayers[player]
+	if not data then return end
+	
+	local success, message = RebirthSystem.performRebirth(player, data)
+	
+	if success then
+		updatePlayerStats(player, data)
+		remotes.UpdatePlayerData:FireClient(player, data)
+		
+		if player.Character then
+			player.Character:BreakJoints()
+		end
+	end
+	
+	local messageGui = Instance.new("ScreenGui")
+	messageGui.Name = "RebirthMessage"
+	messageGui.Parent = player.PlayerGui
+	
+	local messageLabel = Instance.new("TextLabel")
+	messageLabel.Size = UDim2.new(0, 400, 0, 100)
+	messageLabel.Position = UDim2.new(0.5, -200, 0.5, -50)
+	messageLabel.BackgroundColor3 = success and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
+	messageLabel.TextScaled = true
+	messageLabel.Text = message
+	messageLabel.TextColor3 = Color3.new(1, 1, 1)
+	messageLabel.Font = Enum.Font.SourceSansBold
+	messageLabel.Parent = messageGui
+	
+	game:GetService("Debris"):AddItem(messageGui, 3)
+end)
+
+Players.PlayerAdded:Connect(handlePlayerJoin)
+Players.PlayerRemoving:Connect(handlePlayerLeave)
+
+spawnHeatSources()
+
+game:BindToClose(function()
+	for player in pairs(activePlayers) do
+		savePlayerData(player)
 	end
 end)
