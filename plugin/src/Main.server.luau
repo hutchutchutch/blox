@@ -153,21 +153,46 @@ local function createHeatSource(position: Vector3, heatType: Types.HeatType, val
 	end
 end
 
-local function spawnHeatSources()
-	local spawnPositions = {
-		Vector3.new(math.random(-200, 200), 5, math.random(-200, 200)),
-		Vector3.new(math.random(-200, 200), 5, math.random(-200, 200)),
-		Vector3.new(math.random(-200, 200), 5, math.random(-200, 200)),
-	}
+local function getGroundHeight(x: number, z: number): number
+	local ray = workspace:Raycast(
+		Vector3.new(x, 100, z),
+		Vector3.new(0, -200, 0)
+	)
 	
-	for _, pos in spawnPositions do
-		local rand = math.random()
-		if rand < 0.7 then
-			createHeatSource(pos, "good", math.random(100, 500))
-		elseif rand < 0.9 then
-			createHeatSource(pos, "bad", 0)
-		else
-			createHeatSource(pos, "egg", math.random(1, 5))
+	if ray then
+		return ray.Position.Y + 2
+	end
+	return 5
+end
+
+local function spawnHeatSources()
+	local currentSourceCount = #heatSources
+	local maxSources = 15
+	local spawnCount = math.min(5, maxSources - currentSourceCount)
+	
+	for i = 1, spawnCount do
+		local x = math.random(-200, 200)
+		local z = math.random(-200, 200)
+		local y = getGroundHeight(x, z)
+		local pos = Vector3.new(x, y, z)
+		
+		local validSpawn = true
+		for _, source in heatSources do
+			if (source.position - pos).Magnitude < SPAWN_DISTANCE_MIN then
+				validSpawn = false
+				break
+			end
+		end
+		
+		if validSpawn then
+			local rand = math.random()
+			if rand < 0.6 then
+				createHeatSource(pos, "good", math.random(100, 500))
+			elseif rand < 0.85 then
+				createHeatSource(pos, "bad", 0)
+			else
+				createHeatSource(pos, "egg", math.random(1, 5))
+			end
 		end
 	end
 end
@@ -343,7 +368,17 @@ end)
 Players.PlayerAdded:Connect(handlePlayerJoin)
 Players.PlayerRemoving:Connect(handlePlayerLeave)
 
+wait(2)
 spawnHeatSources()
+
+spawn(function()
+	while true do
+		wait(10)
+		if #heatSources < 10 then
+			spawnHeatSources()
+		end
+	end
+end)
 
 game:BindToClose(function()
 	for player in pairs(activePlayers) do

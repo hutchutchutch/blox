@@ -1,6 +1,48 @@
 {
-  "name": "MCPStudioPlugin",
+  "name": "HeatSeekerGrassland",
   "tree": {
-    "$path": "src"
+    "$className": "DataModel",
+    
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "Main": {
+        "$path": "src/Main.server.luau"
+      },
+      "GrasslandSetup": {
+        "$path": "src/GrasslandSetup.server.luau"
+      },
+      "Types": {
+        "$path": "src/Types.luau"
+      },
+      "RewardSystem": {
+        "$path": "src/RewardSystem.luau"
+      },
+      "RebirthSystem": {
+        "$path": "src/RebirthSystem.luau"
+      }
+    },
+    
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "ClientMain": {
+          "$path": "src/ClientMain.client.luau"
+        },
+        "MovementController": {
+          "$path": "src/MovementController.client.luau"
+        },
+        "MusicSystem": {
+          "$path": "src/MusicSystem.client.luau"
+        }
+      }
+    },
+    
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Types": {
+        "$path": "src/Types.luau"
+      }
+    }
   }
 }

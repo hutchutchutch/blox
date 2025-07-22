@@ -169,17 +169,27 @@ local function updateTemperatureVisuals(temperature: Types.Temperature)
 		if intensity > 0.3 then
 			for i = 1, math.floor(intensity * 10) do
 				local sparkle = Instance.new("Frame")
-				sparkle.Size = UDim2.new(0, 4, 0, 4)
+				sparkle.Size = UDim2.new(0, math.random(3, 6), 0, math.random(3, 6))
 				sparkle.Position = UDim2.new(math.random(), 0, math.random(), 0)
-				sparkle.BackgroundColor3 = Color3.new(1, 1, 0)
+				sparkle.BackgroundColor3 = Color3.fromHSV(0.15, 1 - (math.random() * 0.3), 1)
+				sparkle.Rotation = math.random(0, 360)
 				sparkle.Parent = particleContainer
 				
-				TweenService:Create(sparkle, TweenInfo.new(1), {
-					Position = UDim2.new(sparkle.Position.X.Scale, 0, sparkle.Position.Y.Scale - 0.1, 0),
-					BackgroundTransparency = 1
+				local glowEffect = Instance.new("UIGradient")
+				glowEffect.Color = ColorSequence.new{
+					ColorSequenceKeypoint.new(0, Color3.new(1, 1, 0.8)),
+					ColorSequenceKeypoint.new(0.5, Color3.new(1, 0.9, 0.6)),
+					ColorSequenceKeypoint.new(1, Color3.new(1, 0.8, 0.4))
+				}
+				glowEffect.Parent = sparkle
+				
+				TweenService:Create(sparkle, TweenInfo.new(1.5, Enum.EasingStyle.Sine), {
+					Position = UDim2.new(sparkle.Position.X.Scale, 0, sparkle.Position.Y.Scale - 0.15, 0),
+					BackgroundTransparency = 1,
+					Rotation = sparkle.Rotation + 180
 				}):Play()
 				
-				game:GetService("Debris"):AddItem(sparkle, 1)
+				game:GetService("Debris"):AddItem(sparkle, 1.5)
 			end
 		end
 	elseif heatType == "bad" then
@@ -201,22 +211,52 @@ local function updateTemperatureVisuals(temperature: Types.Temperature)
 		tempBar.BackgroundColor3 = Color3.new(1, 0.71, 0.76)
 		tempLabel.Text = "EGG! " .. tempLabel.Text
 		
-		for i = 1, 3 do
+		for i = 1, 5 do
 			local butterfly = Instance.new("ImageLabel")
-			butterfly.Size = UDim2.new(0, 30, 0, 30)
+			butterfly.Size = UDim2.new(0, 40, 0, 40)
 			butterfly.Position = UDim2.new(math.random(), 0, math.random(), 0)
 			butterfly.BackgroundTransparency = 1
 			butterfly.Image = "rbxasset://textures/particles/sparkles_main.dds"
-			butterfly.ImageColor3 = Color3.fromHSV(math.random(), 0.5, 1)
+			butterfly.ImageColor3 = Color3.fromHSV(math.random(), 0.7, 1)
+			butterfly.Rotation = math.random(-30, 30)
 			butterfly.Parent = particleContainer
 			
-			TweenService:Create(butterfly, TweenInfo.new(2), {
-				Position = UDim2.new(butterfly.Position.X.Scale + math.random(-0.2, 0.2), 0, 
-									butterfly.Position.Y.Scale + math.random(-0.2, 0.2), 0),
+			local flutter = TweenService:Create(butterfly, 
+				TweenInfo.new(0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+				Rotation = butterfly.Rotation + 20
+			})
+			flutter:Play()
+			
+			TweenService:Create(butterfly, TweenInfo.new(3, Enum.EasingStyle.Linear), {
+				Position = UDim2.new(
+					butterfly.Position.X.Scale + math.random(-0.3, 0.3), 0, 
+					butterfly.Position.Y.Scale + math.random(-0.3, -0.1), 0
+				),
 				ImageTransparency = 1
 			}):Play()
 			
-			game:GetService("Debris"):AddItem(butterfly, 2)
+			game:GetService("Debris"):AddItem(butterfly, 3)
+		end
+		
+		for i = 1, 3 do
+			local petal = Instance.new("Frame")
+			petal.Size = UDim2.new(0, 15, 0, 15)
+			petal.Position = UDim2.new(0.5, 0, 0.5, 0)
+			petal.BackgroundColor3 = Color3.fromHSV(math.random() * 0.3 + 0.8, 0.8, 1)
+			petal.BorderSizePixel = 0
+			petal.Parent = particleContainer
+			
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0.5, 0)
+			corner.Parent = petal
+			
+			TweenService:Create(petal, TweenInfo.new(2), {
+				Position = UDim2.new(math.random(), 0, 1, 0),
+				Rotation = math.random(0, 720),
+				BackgroundTransparency = 1
+			}):Play()
+			
+			game:GetService("Debris"):AddItem(petal, 2)
 		end
 	end
 	
