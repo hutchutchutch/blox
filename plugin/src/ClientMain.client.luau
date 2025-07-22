@@ -7,10 +7,10 @@ local SoundService = game:GetService("SoundService")
 local CollectionService = game:GetService("CollectionService")
 
 local player = Players.LocalPlayer
-local remotes = ReplicatedStorage:WaitForChild("HeatSeekerRemotes")
-
 local playerGui = player:WaitForChild("PlayerGui")
 local Types = require(script.Parent.Parent.Types)
+
+local remotes = ReplicatedStorage:WaitForChild("HeatSeekerRemotes")
 
 local currentPlayerData: Types.PlayerData? = nil
 local currentGameState: Types.GameState? = nil
@@ -194,7 +194,7 @@ instructionLabel.TextScaled = true
 instructionLabel.TextColor3 = Color3.new(1, 1, 1)
 instructionLabel.TextStrokeTransparency = 0.5
 instructionLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
-instructionLabel.Text = "Press E to pickup/drop objects. Bring them to the green zone!"
+instructionLabel.Text = "Press E to pickup eggs. Dogs will swarm! Press E again to throw eggs at dogs!"
 instructionLabel.Parent = screenGui
 
 local function updateTemperatureVisuals(temperature: Types.Temperature)
@@ -335,12 +335,21 @@ local function updateTemperatureVisuals(temperature: Types.Temperature)
 	overlayFrame.BackgroundTransparency = 1 - (intensity * 0.2)
 end
 
+local carriedEgg = nil
+
 local function handleCollectInput()
 	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
 		return
 	end
 	
 	local position = player.Character.HumanoidRootPart.Position
+	
+	if carriedEgg then
+		local mouse = player:GetMouse()
+		remotes.ThrowEgg:FireServer(mouse.Hit.Position)
+		carriedEgg = nil
+		return
+	end
 	
 	if carriedObject then
 		remotes.DropObject:FireServer()
@@ -352,7 +361,14 @@ local function handleCollectInput()
 		if part:IsA("BasePart") then
 			local distance = (part.Position - position).Magnitude
 			if distance <= 10 then
-				if CollectionService:HasTag(part, "CollectibleObject") then
+				if CollectionService:HasTag(part, "PickupEgg") then
+					local eggId = part:GetAttribute("EggId")
+					if eggId then
+						remotes.PickupEgg:FireServer(eggId)
+						carriedEgg = part
+						break
+					end
+				elseif CollectionService:HasTag(part, "CollectibleObject") then
 					local objectId = part:GetAttribute("ObjectId")
 					if objectId then
 						remotes.PickupObject:FireServer(objectId)
@@ -515,4 +531,28 @@ end)
 
 player.CharacterAdded:Connect(function(character)
 	carriedObject = nil
+	carriedEgg = nil
+end)
+
+local eggIndicator = Instance.new("TextLabel")
+eggIndicator.Name = "EggIndicator"
+eggIndicator.Size = UDim2.new(0, 300, 0, 50)
+eggIndicator.Position = UDim2.new(0.5, -150, 0.8, -50)
+eggIndicator.BackgroundTransparency = 1
+eggIndicator.Font = Enum.Font.SourceSansBold
+eggIndicator.TextScaled = true
+eggIndicator.TextColor3 = Color3.new(1, 1, 0)
+eggIndicator.TextStrokeTransparency = 0
+eggIndicator.TextStrokeColor3 = Color3.new(0, 0, 0)
+eggIndicator.Text = ""
+eggIndicator.Visible = false
+eggIndicator.Parent = screenGui
+
+RunService.Heartbeat:Connect(function()
+	if carriedEgg and carriedEgg.Parent then
+		eggIndicator.Text = "🥚 HOLDING EGG - PRESS E TO THROW!"
+		eggIndicator.Visible = true
+	else
+		eggIndicator.Visible = false
+	end
 end)

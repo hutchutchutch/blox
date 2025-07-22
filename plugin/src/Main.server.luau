@@ -16,6 +16,11 @@ local OBJECTS_TO_COLLECT = 5
 local DOG_COUNT = 10
 local DOG_SPEED = 20
 local DROPOFF_RADIUS = 15
+local FIREBALL_SPAWN_INTERVAL = 0.5
+local FIREBALL_DAMAGE = 20
+local EGG_SPAWN_COUNT = 50
+local EGG_THROW_SPEED = 50
+local EGG_THROW_DAMAGE = 30
 
 local playerDataStore = DataStoreService:GetDataStore("HeatSeekerPlayerData")
 
@@ -24,6 +29,8 @@ local predators: {Types.Predator} = {}
 local activePlayers: {[Player]: Types.PlayerData} = {}
 local collectibleObjects: {Types.CollectibleObject} = {}
 local dogs: {Types.Dog} = {}
+local eggs: {[string]: Part} = {}
+local playerHeldEggs: {[Player]: Part} = {}
 local gameState: Types.GameState = {
 	timeRemaining = ROUND_TIME,
 	objectsCollected = 0,
@@ -50,7 +57,9 @@ local function createRemotes()
 		"PickupObject",
 		"DropObject",
 		"UpdateGameState",
-		"StartRound"
+		"StartRound",
+		"PickupEgg",
+		"ThrowEgg"
 	}
 	
 	for _, eventName in events do
@@ -263,6 +272,27 @@ end
 local function handlePlayerLeave(player: Player)
 	savePlayerData(player)
 	activePlayers[player] = nil
+	
+	local egg = playerHeldEggs[player]
+	if egg and egg.Parent then
+		for _, weld in egg:GetChildren() do
+			if weld:IsA("WeldConstraint") then
+				weld:Destroy()
+			end
+		end
+		
+		local float = Instance.new("BodyPosition")
+		float.MaxForce = Vector3.new(0, 4000, 0)
+		float.Position = egg.Position
+		float.Parent = egg
+		
+		local spin = Instance.new("BodyAngularVelocity")
+		spin.AngularVelocity = Vector3.new(0, 3, 0)
+		spin.MaxTorque = Vector3.new(0, 4000, 0)
+		spin.Parent = egg
+	end
+	
+	playerHeldEggs[player] = nil
 end
 
 local remotes = createRemotes()
@@ -550,22 +580,27 @@ local function createDog(position: Vector3): Types.Dog
 	return dog
 end
 
-local function spawnDogSwarm()
-	if gameState.dogsSpawned then return end
-	gameState.dogsSpawned = true
-	
-	for i = 1, DOG_COUNT do
-		local angle = (i / DOG_COUNT) * math.pi * 2
-		local distance = 100
+local function spawnDogSwarm(targetPlayer: Player?)
+	for i = 1, 5 do
+		local angle = (i / 5) * math.pi * 2
+		local distance = 30
 		local x = math.cos(angle) * distance
 		local z = math.sin(angle) * distance
-		local y = getGroundHeight(x, z) + 2
 		
-		createDog(Vector3.new(x, y, z))
+		if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+			x = x + targetPlayer.Character.HumanoidRootPart.Position.X
+			z = z + targetPlayer.Character.HumanoidRootPart.Position.Z
+		end
+		
+		local y = getGroundHeight(x, z) + 2
+		local dog = createDog(Vector3.new(x, y, z))
+		if targetPlayer then
+			dog.target = targetPlayer
+		end
 	end
 	
 	for _, player in Players:GetPlayers() do
-		remotes.PredatorAlert:FireClient(player, "DOG SWARM INCOMING!")
+		remotes.PredatorAlert:FireClient(player, "DOGS ARE SWARMING!")
 	end
 end
 
@@ -641,7 +676,10 @@ local function startNewRound()
 			end
 			
 			if gameState.timeRemaining <= 0 and not gameState.dogsSpawned then
-				spawnDogSwarm()
+				gameState.dogsSpawned = true
+				for _, player in Players:GetPlayers() do
+					spawnDogSwarm(player)
+				end
 			end
 		end
 	end)
@@ -755,5 +793,274 @@ end)
 remotes.StartRound.OnServerEvent:Connect(function(player: Player)
 	if not gameState.roundActive then
 		startNewRound()
+	end
+end)
+
+local function createFireball()
+	local x = math.random(-200, 200)
+	local z = math.random(-200, 200)
+	local startY = 150
+	
+	local fireball = Instance.new("Part")
+	fireball.Name = "Fireball"
+	fireball.Size = Vector3.new(3, 3, 3)
+	fireball.Shape = Enum.PartType.Ball
+	fireball.Position = Vector3.new(x, startY, z)
+	fireball.BrickColor = BrickColor.new("Really red")
+	fireball.Material = Enum.Material.Neon
+	fireball.TopSurface = Enum.SurfaceType.Smooth
+	fireball.BottomSurface = Enum.SurfaceType.Smooth
+	fireball.CanCollide = false
+	fireball.Parent = workspace
+	
+	local fire = Instance.new("Fire")
+	fire.Size = 10
+	fire.Heat = 20
+	fire.Color = Color3.new(1, 0.5, 0)
+	fire.SecondaryColor = Color3.new(1, 0, 0)
+	fire.Parent = fireball
+	
+	local light = Instance.new("PointLight")
+	light.Brightness = 3
+	light.Color = Color3.new(1, 0.5, 0)
+	light.Range = 15
+	light.Parent = fireball
+	
+	local trail = Instance.new("Trail")
+	local attachment0 = Instance.new("Attachment", fireball)
+	local attachment1 = Instance.new("Attachment", fireball)
+	attachment0.Position = Vector3.new(0, 1, 0)
+	attachment1.Position = Vector3.new(0, -1, 0)
+	trail.Attachment0 = attachment0
+	trail.Attachment1 = attachment1
+	trail.Lifetime = 1
+	trail.MinLength = 0
+	trail.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.new(1, 0.5, 0)),
+		ColorSequenceKeypoint.new(0.5, Color3.new(1, 0.2, 0)),
+		ColorSequenceKeypoint.new(1, Color3.new(0.5, 0, 0))
+	}
+	trail.Parent = fireball
+	
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.Velocity = Vector3.new(0, -50, 0)
+	bodyVelocity.MaxForce = Vector3.new(0, math.huge, 0)
+	bodyVelocity.Parent = fireball
+	
+	local hitConnection
+	hitConnection = fireball.Touched:Connect(function(hit)
+		if hit.Parent:FindFirstChild("Humanoid") then
+			local humanoid = hit.Parent:FindFirstChild("Humanoid")
+			if humanoid and Players:GetPlayerFromCharacter(hit.Parent) then
+				humanoid:TakeDamage(FIREBALL_DAMAGE)
+			end
+		end
+		
+		local explosion = Instance.new("Explosion")
+		explosion.Position = fireball.Position
+		explosion.BlastRadius = 10
+		explosion.BlastPressure = 0
+		explosion.Parent = workspace
+		
+		fireball:Destroy()
+		hitConnection:Disconnect()
+	end)
+	
+	game:GetService("Debris"):AddItem(fireball, 10)
+end
+
+spawn(function()
+	while true do
+		wait(FIREBALL_SPAWN_INTERVAL)
+		createFireball()
+	end
+end)
+
+local function createPickupEgg(position: Vector3)
+	local egg = Instance.new("Part")
+	egg.Name = "PickupEgg"
+	egg.Shape = Enum.PartType.Ball
+	egg.Size = Vector3.new(2, 2.5, 2)
+	egg.Position = position
+	egg.BrickColor = BrickColor.new("Pastel yellow")
+	egg.Material = Enum.Material.Neon
+	egg.TopSurface = Enum.SurfaceType.Smooth
+	egg.BottomSurface = Enum.SurfaceType.Smooth
+	egg.Parent = workspace
+	
+	local eggId = "egg_" .. tostring(tick()) .. "_" .. tostring(math.random(1000, 9999))
+	egg:SetAttribute("EggId", eggId)
+	eggs[eggId] = egg
+	
+	local light = Instance.new("PointLight")
+	light.Brightness = 1
+	light.Color = Color3.new(1, 1, 0.8)
+	light.Range = 10
+	light.Parent = egg
+	
+	local sparkles = Instance.new("Sparkles")
+	sparkles.SparkleColor = Color3.new(1, 1, 0.8)
+	sparkles.Parent = egg
+	
+	local float = Instance.new("BodyPosition")
+	float.MaxForce = Vector3.new(0, 4000, 0)
+	float.Position = position + Vector3.new(0, math.sin(tick()) * 0.5, 0)
+	float.Parent = egg
+	
+	local spin = Instance.new("BodyAngularVelocity")
+	spin.AngularVelocity = Vector3.new(0, 3, 0)
+	spin.MaxTorque = Vector3.new(0, 4000, 0)
+	spin.Parent = egg
+	
+	spawn(function()
+		while egg.Parent do
+			wait(0.1)
+			if float then
+				float.Position = position + Vector3.new(0, math.sin(tick() * 2) * 0.5 + 1, 0)
+			end
+		end
+	end)
+	
+	CollectionService:AddTag(egg, "PickupEgg")
+end
+
+local function spawnEggsAcrossMap()
+	for i = 1, EGG_SPAWN_COUNT do
+		local x = math.random(-200, 200)
+		local z = math.random(-200, 200)
+		local y = getGroundHeight(x, z) + 2
+		createPickupEgg(Vector3.new(x, y, z))
+	end
+end
+
+remotes.PickupEgg.OnServerEvent:Connect(function(player: Player, eggId: string)
+	if playerHeldEggs[player] then
+		return
+	end
+	
+	local egg = eggs[eggId]
+	if not egg or not egg.Parent then
+		return
+	end
+	
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+		return
+	end
+	
+	local distance = (egg.Position - player.Character.HumanoidRootPart.Position).Magnitude
+	if distance > 10 then
+		return
+	end
+	
+	playerHeldEggs[player] = egg
+	
+	if egg:FindFirstChild("BodyPosition") then
+		egg.BodyPosition:Destroy()
+	end
+	if egg:FindFirstChild("BodyAngularVelocity") then
+		egg.BodyAngularVelocity:Destroy()
+	end
+	
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = player.Character.HumanoidRootPart
+	weld.Part1 = egg
+	weld.Parent = egg
+	
+	egg.CFrame = player.Character.HumanoidRootPart.CFrame + player.Character.HumanoidRootPart.CFrame.LookVector * 2 + Vector3.new(0, 2, 0)
+	
+	spawnDogSwarm(player)
+	
+	for _, dog in dogs do
+		if dog.model and dog.model.Parent and dog.humanoid.Health > 0 then
+			dog.target = player
+		end
+	end
+end)
+
+remotes.ThrowEgg.OnServerEvent:Connect(function(player: Player, targetPosition: Vector3)
+	local egg = playerHeldEggs[player]
+	if not egg or not egg.Parent then
+		return
+	end
+	
+	playerHeldEggs[player] = nil
+	
+	for _, weld in egg:GetChildren() do
+		if weld:IsA("WeldConstraint") then
+			weld:Destroy()
+		end
+	end
+	
+	local direction = (targetPosition - egg.Position).Unit
+	
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.Velocity = direction * EGG_THROW_SPEED
+	bodyVelocity.MaxForce = Vector3.new(4000, 4000, 4000)
+	bodyVelocity.Parent = egg
+	
+	local hitConnection
+	hitConnection = egg.Touched:Connect(function(hit)
+		if hit.Parent ~= player.Character then
+			local humanoid = hit.Parent:FindFirstChild("Humanoid")
+			if humanoid then
+				local isDog = false
+				for _, dog in dogs do
+					if dog.model == hit.Parent then
+						isDog = true
+						humanoid:TakeDamage(EGG_THROW_DAMAGE)
+						
+						local splat = Instance.new("Part")
+						splat.Name = "EggSplat"
+						splat.Size = Vector3.new(4, 0.2, 4)
+						splat.Position = egg.Position
+						splat.BrickColor = BrickColor.new("Bright yellow")
+						splat.Material = Enum.Material.Neon
+						splat.Anchored = true
+						splat.CanCollide = false
+						splat.Transparency = 0.5
+						splat.Parent = workspace
+						
+						game:GetService("Debris"):AddItem(splat, 2)
+						break
+					end
+				end
+			end
+			
+			if egg.Parent then
+				local eggId = egg:GetAttribute("EggId")
+				if eggId then
+					eggs[eggId] = nil
+				end
+				egg:Destroy()
+			end
+			hitConnection:Disconnect()
+		end
+	end)
+	
+	game:GetService("Debris"):AddItem(bodyVelocity, 0.5)
+	game:GetService("Debris"):AddItem(egg, 5)
+end)
+
+spawn(function()
+	wait(5)
+	spawnEggsAcrossMap()
+	
+	while true do
+		wait(30)
+		local eggCount = 0
+		for _, egg in eggs do
+			if egg and egg.Parent then
+				eggCount = eggCount + 1
+			end
+		end
+		
+		if eggCount < EGG_SPAWN_COUNT / 2 then
+			for i = 1, 10 do
+				local x = math.random(-200, 200)
+				local z = math.random(-200, 200)
+				local y = getGroundHeight(x, z) + 2
+				createPickupEgg(Vector3.new(x, y, z))
+			end
+		end
 	end
 end)
