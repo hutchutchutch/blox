@@ -13,6 +13,8 @@ local playerGui = player:WaitForChild("PlayerGui")
 local Types = require(script.Parent.Parent.Types)
 
 local currentPlayerData: Types.PlayerData? = nil
+local currentGameState: Types.GameState? = nil
+local carriedObject = nil
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "HeatSeekerUI"
@@ -125,6 +127,75 @@ rebirthInfo.TextScaled = true
 rebirthInfo.TextColor3 = Color3.new(1, 1, 1)
 rebirthInfo.Font = Enum.Font.SourceSans
 rebirthInfo.Parent = screenGui
+
+local gameInfoFrame = Instance.new("Frame")
+gameInfoFrame.Name = "GameInfoFrame"
+gameInfoFrame.Size = UDim2.new(0, 300, 0, 150)
+gameInfoFrame.Position = UDim2.new(0.5, -150, 0, 100)
+gameInfoFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+gameInfoFrame.BackgroundTransparency = 0.3
+gameInfoFrame.Parent = screenGui
+
+local timerLabel = Instance.new("TextLabel")
+timerLabel.Name = "TimerLabel"
+timerLabel.Size = UDim2.new(1, -10, 0, 60)
+timerLabel.Position = UDim2.new(0, 5, 0, 5)
+timerLabel.BackgroundTransparency = 1
+timerLabel.Font = Enum.Font.SourceSansBold
+timerLabel.TextScaled = true
+timerLabel.TextColor3 = Color3.new(1, 1, 1)
+timerLabel.Text = "Time: --:--"
+timerLabel.Parent = gameInfoFrame
+
+local objectCountLabel = Instance.new("TextLabel")
+objectCountLabel.Name = "ObjectCountLabel"
+objectCountLabel.Size = UDim2.new(1, -10, 0, 40)
+objectCountLabel.Position = UDim2.new(0, 5, 0, 70)
+objectCountLabel.BackgroundTransparency = 1
+objectCountLabel.Font = Enum.Font.SourceSansBold
+objectCountLabel.TextScaled = true
+objectCountLabel.TextColor3 = Color3.new(0.5, 1, 0.5)
+objectCountLabel.Text = "Objects: 0/0"
+objectCountLabel.Parent = gameInfoFrame
+
+local startButton = Instance.new("TextButton")
+startButton.Name = "StartButton"
+startButton.Size = UDim2.new(0, 200, 0, 50)
+startButton.Position = UDim2.new(0.5, -100, 0.8, 0)
+startButton.BackgroundColor3 = Color3.new(0, 0.7, 0)
+startButton.Text = "START ROUND"
+startButton.TextScaled = true
+startButton.TextColor3 = Color3.new(1, 1, 1)
+startButton.Font = Enum.Font.SourceSansBold
+startButton.Parent = screenGui
+
+local alertLabel = Instance.new("TextLabel")
+alertLabel.Name = "AlertLabel"
+alertLabel.Size = UDim2.new(0, 600, 0, 100)
+alertLabel.Position = UDim2.new(0.5, -300, 0.3, 0)
+alertLabel.BackgroundColor3 = Color3.new(1, 0, 0)
+alertLabel.BackgroundTransparency = 1
+alertLabel.Font = Enum.Font.SourceSansBold
+alertLabel.TextScaled = true
+alertLabel.TextColor3 = Color3.new(1, 0, 0)
+alertLabel.TextStrokeTransparency = 0
+alertLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+alertLabel.Text = ""
+alertLabel.Visible = false
+alertLabel.Parent = screenGui
+
+local instructionLabel = Instance.new("TextLabel")
+instructionLabel.Name = "InstructionLabel"
+instructionLabel.Size = UDim2.new(0, 400, 0, 30)
+instructionLabel.Position = UDim2.new(0.5, -200, 0.9, 0)
+instructionLabel.BackgroundTransparency = 1
+instructionLabel.Font = Enum.Font.SourceSans
+instructionLabel.TextScaled = true
+instructionLabel.TextColor3 = Color3.new(1, 1, 1)
+instructionLabel.TextStrokeTransparency = 0.5
+instructionLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+instructionLabel.Text = "Press E to pickup/drop objects. Bring them to the green zone!"
+instructionLabel.Parent = screenGui
 
 local function updateTemperatureVisuals(temperature: Types.Temperature)
 	local intensity = temperature.intensity or 0
@@ -271,18 +342,33 @@ local function handleCollectInput()
 	
 	local position = player.Character.HumanoidRootPart.Position
 	
+	if carriedObject then
+		remotes.DropObject:FireServer()
+		carriedObject = nil
+		return
+	end
+	
 	for _, part in workspace:GetDescendants() do
-		if part:IsA("BasePart") and CollectionService:HasTag(part, "HeatSource") then
+		if part:IsA("BasePart") then
 			local distance = (part.Position - position).Magnitude
 			if distance <= 10 then
-				local sourceId = part:GetAttribute("SourceId")
-				if sourceId then
-					if CollectionService:HasTag(part, "good") then
-						remotes.CollectTreasure:FireServer(sourceId)
-					elseif CollectionService:HasTag(part, "egg") then
-						remotes.CollectEgg:FireServer(sourceId)
+				if CollectionService:HasTag(part, "CollectibleObject") then
+					local objectId = part:GetAttribute("ObjectId")
+					if objectId then
+						remotes.PickupObject:FireServer(objectId)
+						carriedObject = part
+						break
 					end
-					break
+				elseif CollectionService:HasTag(part, "HeatSource") then
+					local sourceId = part:GetAttribute("SourceId")
+					if sourceId then
+						if CollectionService:HasTag(part, "good") then
+							remotes.CollectTreasure:FireServer(sourceId)
+						elseif CollectionService:HasTag(part, "egg") then
+							remotes.CollectEgg:FireServer(sourceId)
+						end
+						break
+					end
 				end
 			end
 		end
@@ -371,4 +457,62 @@ remotes.SpawnEffect.OnClientEvent:Connect(function(effectType: string, position:
 		
 		game:GetService("Debris"):AddItem(eggModel, 1)
 	end
+end)
+
+remotes.UpdateGameState.OnClientEvent:Connect(function(gameState: Types.GameState)
+	currentGameState = gameState
+	
+	if gameState.roundActive then
+		gameInfoFrame.Visible = true
+		startButton.Visible = false
+		
+		local minutes = math.floor(gameState.timeRemaining / 60)
+		local seconds = gameState.timeRemaining % 60
+		timerLabel.Text = string.format("Time: %02d:%02d", minutes, seconds)
+		
+		if gameState.timeRemaining <= 30 then
+			timerLabel.TextColor3 = Color3.new(1, 0, 0)
+		elseif gameState.timeRemaining <= 60 then
+			timerLabel.TextColor3 = Color3.new(1, 1, 0)
+		else
+			timerLabel.TextColor3 = Color3.new(1, 1, 1)
+		end
+		
+		objectCountLabel.Text = string.format("Objects: %d/%d", gameState.objectsCollected, gameState.objectsRequired)
+		
+		if gameState.objectsCollected >= gameState.objectsRequired then
+			objectCountLabel.TextColor3 = Color3.new(0, 1, 0)
+		end
+	else
+		gameInfoFrame.Visible = false
+		startButton.Visible = true
+	end
+end)
+
+remotes.PredatorAlert.OnClientEvent:Connect(function(message: string)
+	alertLabel.Text = message
+	alertLabel.Visible = true
+	
+	TweenService:Create(alertLabel, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 5, true), {
+		TextTransparency = 0.5
+	}):Play()
+	
+	local alertSound = Instance.new("Sound")
+	alertSound.SoundId = "rbxasset://sounds/haunting.wav"
+	alertSound.Volume = 0.7
+	alertSound.Parent = SoundService
+	alertSound:Play()
+	
+	game:GetService("Debris"):AddItem(alertSound, 5)
+	
+	wait(3)
+	alertLabel.Visible = false
+end)
+
+startButton.MouseButton1Click:Connect(function()
+	remotes.StartRound:FireServer()
+end)
+
+player.CharacterAdded:Connect(function(character)
+	carriedObject = nil
 end)

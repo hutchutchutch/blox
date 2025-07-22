@@ -52,4 +52,28 @@ export type EggData = {
 	color: Color3,
 }
 
+export type CollectibleObject = {
+	part: Part,
+	id: string,
+	position: Vector3,
+	value: number,
+	isCarried: boolean,
+	carriedBy: Player?,
+}
+
+export type GameState = {
+	timeRemaining: number,
+	objectsCollected: number,
+	objectsRequired: number,
+	dogsSpawned: boolean,
+	roundActive: boolean,
+}
+
+export type Dog = {
+	model: Model,
+	humanoid: Humanoid,
+	target: Player?,
+	speed: number,
+}
+
 return {}
